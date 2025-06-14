@@ -111,7 +111,7 @@ def process_cdu_line(line_datarefs: dict[str, str], row: int) -> list[list]:
         if not text or text.isspace():
             continue
 
-        # The first and last rows only cover a single row. All other rows cover 2 rows between the label (X, LX or GX) and the main content (G, L, M, S, I or SI)
+        # The first and last rows only cover a single row. All other rows cover 2 rows between the label and the main content (scont, cont)
         if (row != 0 and row != 14) and not target_suffix in dataref:
             continue
 
