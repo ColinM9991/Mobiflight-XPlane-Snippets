@@ -202,7 +202,7 @@ async def handle_datarefs():
             case 1:
                 result = f"{UP_ARROW}{DOWN_ARROW}"
             case 2:
-                result = f"{UP_ARROW}"
+                result = f"{UP_ARROW} "
             case 3:
                 result = f"{DOWN_ARROW}"
             case _:
