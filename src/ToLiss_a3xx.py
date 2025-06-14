@@ -18,16 +18,13 @@ EXTERNAL_DISPLAY_WS = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-capta
 
 BALLOT_BOX = "\u2610"
 UP_ARROW = "\u2191"
-DOWN_ARROW ="\u2193"
+DOWN_ARROW = "\u2193"
 LEFT_ARROW = "\u2190"
 RIGHT_ARROW = "\u2192"
 GREEK_DELTA = "\u0394"
-DEGREES = "\u00B0"
+DEGREES = "\u00b0"
 
-CONTENT_MAP = {
-    "`": DEGREES,
-    "|": GREEK_DELTA
-}
+CONTENT_MAP = {"`": DEGREES, "|": GREEK_DELTA}
 
 SYMBOL_MAP = CONTENT_MAP | {
     "A": "[",
@@ -43,15 +40,9 @@ SYMBOL_MAP = CONTENT_MAP | {
     "D": DOWN_ARROW,
 }
 
-COLOR_MAP = {
-    "b": "c"
-}
+COLOR_MAP = {"b": "c"}
 
-SYMBOL_COLOR_MAP = {
-    "E": "a",
-    "4": "a",
-    "5": "a"
-}
+SYMBOL_COLOR_MAP = {"E": "a", "4": "a", "5": "a"}
 
 queue = asyncio.Queue()
 
@@ -59,11 +50,13 @@ queue = asyncio.Queue()
 def get_color(dataref_name: str, char: str):
     suffix = dataref_name[-1]
 
-    if (("label" in dataref_name or "title" in dataref_name) and suffix == "s") or dataref_name.endswith("VertSlewKeys"):
+    if (
+        ("label" in dataref_name or "title" in dataref_name) and suffix == "s"
+    ) or dataref_name.endswith("VertSlewKeys"):
         return "w"
     elif suffix == "s":
         return SYMBOL_COLOR_MAP.get(char, "c")
-    
+
     return COLOR_MAP.get(suffix, suffix)
 
 
@@ -72,7 +65,7 @@ def get_char(dataref_name: str, char: str) -> str:
 
     if suffix == "s":
         return SYMBOL_MAP.get(char, char)
-    
+
     return CONTENT_MAP.get(char, char)
 
 
@@ -209,7 +202,7 @@ async def handle_datarefs():
                 result = ""
 
         return result.rjust(24)
-    
+
     dataref_map = fetch_dataref_mapping()
     last_known_values = {}
     async for websocket in websockets.connect(BASE_WEBSOCKET_URI):
