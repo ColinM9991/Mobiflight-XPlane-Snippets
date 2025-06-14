@@ -25,7 +25,7 @@ GREEK_DELTA = "\u0394"
 DEGREES = "\u00B0"
 
 CONTENT_MAP = {
-    "`": "°",
+    "`": DEGREES,
     "|": GREEK_DELTA
 }
 
@@ -43,6 +43,10 @@ SYMBOL_MAP = CONTENT_MAP | {
     "D": DOWN_ARROW,
 }
 
+COLOR_MAP = {
+    "b": "c"
+}
+
 SYMBOL_COLOR_MAP = {
     "E": "a",
     "4": "a",
@@ -55,14 +59,12 @@ queue = asyncio.Queue()
 def get_color(dataref_name: str, char: str):
     suffix = dataref_name[-1]
 
-    if suffix == "b":
-        return "c"
-    elif ("label" in dataref_name or "title" in dataref_name and suffix == "s") or dataref_name.endswith("VertSlewKeys"):
+    if (("label" in dataref_name or "title" in dataref_name) and suffix == "s") or dataref_name.endswith("VertSlewKeys"):
         return "w"
     elif suffix == "s":
         return SYMBOL_COLOR_MAP.get(char, "c")
     
-    return suffix
+    return COLOR_MAP.get(suffix, suffix)
 
 
 def get_char(dataref_name: str, char: str) -> str:
