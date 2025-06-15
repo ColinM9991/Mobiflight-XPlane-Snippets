@@ -9,15 +9,13 @@ CDU_ROWS = 14
 
 WEBSOCKET_HOST = "localhost"
 WEBSOCKET_PORT = 8320
-MAX_RETRIES = 4
-RETRY_DELAY = 2
 
 BASE_REST_URL = "http://localhost:8086/api/v2/datarefs"
 BASE_WEBSOCKET_URI = f"ws://{WEBSOCKET_HOST}:8086/api/v2"
 EXTERNAL_DISPLAY_WS = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-captain"
 
 CHARACTER_MAPPING = {"`": "\u00b0", "*": "\u2610"}
-COLOR_MAPPING = {"GX": "g", "G": "g", "C": "c", "I": "e", "M": "m"}
+COLOR_MAPPING = {"G": "g", "C": "c", "I": "e", "M": "m"}
 
 queue = asyncio.Queue()
 
@@ -40,9 +38,9 @@ def fetch_dataref_mapping():
 
 
 def get_color(dataref: str) -> bool:
-    dataref_ending = dataref[dataref.rindex("_") + 1 :]
+    dataref_ending = dataref[dataref.rindex("_") + 1]
 
-    return "w" if dataref_ending not in COLOR_MAPPING else COLOR_MAPPING[dataref_ending]
+    return COLOR_MAPPING.get(dataref_ending, "w")
 
 
 def get_size(dataref: str) -> int:
@@ -174,11 +172,11 @@ async def handle_datarefs():
                         base64.b64decode(value).decode().replace("\x00", " ")
                     )
 
-                    if new_values == last_known_values:
-                        continue
+                if new_values == last_known_values:
+                    continue
 
-                    last_known_values = new_values
-                    await queue.put(new_values)
+                last_known_values = new_values
+                await queue.put(new_values)
         except websockets.exceptions.ConnectionClosed:
             continue
 

@@ -9,8 +9,6 @@ CDU_ROWS = 14
 
 WEBSOCKET_HOST = "localhost"
 WEBSOCKET_PORT = 8320
-MAX_RETRIES = 4
-RETRY_DELAY = 2
 
 BASE_REST_URL = "http://localhost:8086/api/v2/datarefs"
 BASE_WEBSOCKET_URI = f"ws://{WEBSOCKET_HOST}:8086/api/v2"
@@ -243,11 +241,11 @@ async def handle_datarefs():
                             base64.b64decode(value).decode().replace("\x00", " ")
                         )
 
-                    if new_values == last_known_values:
-                        continue
+                if new_values == last_known_values:
+                    continue
 
-                    last_known_values = new_values
-                    await queue.put(new_values)
+                last_known_values = new_values
+                await queue.put(new_values)
         except websockets.exceptions.ConnectionClosed:
             continue
 
