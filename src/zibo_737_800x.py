@@ -44,7 +44,7 @@ def get_color(dataref: str) -> bool:
 
 
 def get_size(dataref: str) -> int:
-    return 1 if dataref.endswith("X") or dataref.endswith("S") else 0
+    return 1 if dataref.endswith("_X") or dataref.endswith("_S") else 0
 
 
 def process_cdu_line(line_datarefs: dict[str, str], row: int) -> list[list]:
