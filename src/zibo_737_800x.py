@@ -3,6 +3,7 @@ import base64
 import json
 import urllib.request
 import websockets
+from enum import Enum
 
 CDU_COLUMNS = 24
 CDU_ROWS = 14
@@ -12,21 +13,41 @@ WEBSOCKET_PORT = 8320
 
 BASE_REST_URL = "http://localhost:8086/api/v2/datarefs"
 BASE_WEBSOCKET_URI = f"ws://{WEBSOCKET_HOST}:8086/api/v2"
-EXTERNAL_DISPLAY_WS = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-captain"
 
-CHARACTER_MAPPING = {"`": "\u00b0", "*": "\u2610"}
+WS_CAPTAIN = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-captain"
+WS_CO_PILOT = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-co-pilot"
+
+CHARACTER_MAPPING = {"`": "\u00b0", "*": "\u2610", "=": "\u002a"}
 COLOR_MAPPING = {"G": "g", "C": "c", "I": "e", "M": "m"}
 
 queue = asyncio.Queue()
 
 
-def fetch_dataref_mapping():
+class CduDevice(Enum):
+    Captain = "fmc1"
+    CoPilot = "fmc2"
+
+    def get_endpoint(self) -> str:
+        match self:
+            case CduDevice.Captain:
+                return WS_CAPTAIN
+            case CduDevice.CoPilot:
+                return WS_CO_PILOT
+            case _:
+                raise KeyError(f"Invalid device specified {self.value}")
+
+
+def fetch_dataref_mapping(available_devices: list[CduDevice]):
     with urllib.request.urlopen(BASE_REST_URL, timeout=5) as response:
         response_json = json.load(response)
 
         data = list(response_json["data"])
         dataref_map = filter(
-            lambda x: str(x["name"]).startswith("laminar/B738/fmc1"), data
+            lambda x: any(
+                str(x["name"]).startswith(f"laminar/B738/{device.value}")
+                for device in available_devices
+            ),
+            data,
         )
 
         return dict(
@@ -83,9 +104,7 @@ def group_datarefs_by_line(values: dict[str, str]) -> dict[int, dict[str, str]]:
     for dataref, value in values.items():
         dataref_name = dataref[dataref.rindex("/") + 1 :]
         line_num = (
-            7
-            if dataref_name.startswith("Line_entry")
-            else int(dataref_name[4:6])  # Set to 7 if Line_entry or Line_entry_I
+            7 if dataref_name.startswith("Line_entry") else int(dataref_name[4:6])
         )
 
         if line_num not in grouped_datarefs:
@@ -101,9 +120,7 @@ def get_display_json(values: dict[str, str]) -> str:
     grouped_datarefs = group_datarefs_by_line(values)
 
     for row in range(CDU_ROWS + 1):
-        if (
-            row == 1
-        ):  # Line 0 covers a single row. Skip row 1 as this will be populated by Line01
+        if row == 1:
             continue
 
         dataref_line = row // 2 if row > 0 else 0
@@ -115,28 +132,27 @@ def get_display_json(values: dict[str, str]) -> str:
         line_chars = process_cdu_line(line_datarefs, row)
 
         start_index = (row - 1 if row > 0 else row) * CDU_COLUMNS
-        display_data[start_index : start_index + CDU_COLUMNS] = (
-            line_chars  # Bulk assign the entire row
-        )
+        display_data[start_index : start_index + CDU_COLUMNS] = line_chars
 
     return json.dumps({"Target": "Display", "Data": display_data})
 
 
-async def handle_display_update():
-    async for websocket in websockets.connect(EXTERNAL_DISPLAY_WS):
-        while True:
-            values = await queue.get()
-            display_json = get_display_json(values)
-            try:
-                await websocket.send(display_json)
-            except websockets.exceptions.ConnectionClosed:
-                await queue.put(values)
-                break
+async def handle_display_update(available_devices: list[CduDevice]):
+    device_connections = {
+        device: await websockets.connect(device.get_endpoint())
+        for device in available_devices
+    }
+
+    while True:
+        device, values = await queue.get()
+        display_json = get_display_json(values)
+        await device_connections[device].send(display_json)
 
 
-async def handle_datarefs():
-    dataref_map = fetch_dataref_mapping()
-    last_known_values = {}
+async def handle_datarefs(available_devices: list[CduDevice]):
+    dataref_map = fetch_dataref_mapping(available_devices)
+    last_known_values = {device: {} for device in available_devices}
+
     async for websocket in websockets.connect(BASE_WEBSOCKET_URI):
         try:
             await websocket.send(
@@ -159,7 +175,7 @@ async def handle_datarefs():
                 if "data" not in data:
                     continue
 
-                new_values = dict(last_known_values)
+                new_values = {k: dict(v) for k, v in last_known_values.items()}
 
                 for dataref_id, value in data["data"].items():
                     dataref_id = int(dataref_id)
@@ -167,24 +183,47 @@ async def handle_datarefs():
                         continue
 
                     dataref_name = dataref_map[dataref_id]
+                    device = (
+                        CduDevice.Captain
+                        if CduDevice.Captain.value in dataref_name
+                        else CduDevice.CoPilot
+                    )
 
-                    new_values[dataref_name] = (
+                    new_values[device][dataref_name] = (
                         base64.b64decode(value).decode().replace("\x00", " ")
                     )
 
-                if new_values == last_known_values:
-                    continue
+                for device, values in new_values.items():
+                    if values == last_known_values[device]:
+                        continue
 
-                last_known_values = new_values
-                await queue.put(new_values)
+                    last_known_values[device] = values
+                    await queue.put((device, values))
         except websockets.exceptions.ConnectionClosed:
             continue
 
 
+async def get_available_devices() -> list[CduDevice]:
+    device_candidates = [CduDevice.Captain, CduDevice.CoPilot]
+
+    available_devices = []
+
+    for device in device_candidates:
+        try:
+            async with websockets.connect(device.get_endpoint()) as _:
+                available_devices.append(device)
+        except websockets.WebSocketException:
+            continue
+
+    return available_devices
+
+
 async def main():
+    available_devices = await get_available_devices()
+
     await asyncio.gather(
-        asyncio.create_task(handle_datarefs()),
-        asyncio.create_task(handle_display_update()),
+        asyncio.create_task(handle_datarefs(available_devices)),
+        asyncio.create_task(handle_display_update(available_devices)),
     )
 
 
