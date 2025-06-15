@@ -8,6 +8,7 @@ from enum import Enum
 
 CDU_COLUMNS = 24
 CDU_ROWS = 14
+CDU_CELLS = CDU_COLUMNS * CDU_ROWS
 
 WEBSOCKET_HOST = "localhost"
 WEBSOCKET_PORT = 8320
@@ -83,7 +84,7 @@ def get_size(dataref: str) -> int:
 
 
 def process_cdu_line(line_datarefs: dict[str, str], row: int) -> list[list]:
-    line_chars = [[]] * CDU_COLUMNS
+    line_chars = [[] for _ in range(CDU_COLUMNS)]
 
     target_suffixes = (
         ["_X", "_LX", "_GX"] if row % 2 == 0 else ["_G", "_L", "_M", "_S", "_I", "_SI"]
@@ -129,7 +130,7 @@ def group_datarefs_by_line(values: dict[str, str]) -> dict[int, dict[str, str]]:
 
 
 def get_display_json(values: dict[str, str]) -> str:
-    display_data = [[] for _ in range(CDU_ROWS * CDU_COLUMNS)]
+    display_data = [[] for _ in range(CDU_CELLS)]
 
     grouped_datarefs = group_datarefs_by_line(values)
 
