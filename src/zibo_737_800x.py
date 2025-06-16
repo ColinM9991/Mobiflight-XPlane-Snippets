@@ -129,7 +129,7 @@ def group_datarefs_by_line(values: dict[str, str]) -> dict[int, dict[str, str]]:
     return grouped_datarefs
 
 
-def get_display_json(values: dict[str, str]) -> str:
+def generate_display_json(values: dict[str, str]) -> str:
     display_data = [[] for _ in range(CDU_CELLS)]
 
     grouped_datarefs = group_datarefs_by_line(values)
@@ -159,7 +159,7 @@ async def handle_device_update(device: CduDevice, queue: asyncio.Queue):
             if target_device != device:
                 continue
 
-            display_json = get_display_json(values)
+            display_json = generate_display_json(values)
             try:
                 await device_connection.send(display_json)
             except websockets.ConnectionClosedError:

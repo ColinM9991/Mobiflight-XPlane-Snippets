@@ -1,18 +1,23 @@
 import asyncio
 import base64
+import copy
 import json
 import urllib.request
 import websockets
+from enum import Enum
 
 CDU_COLUMNS = 24
 CDU_ROWS = 14
+CDU_CELLS = CDU_COLUMNS * CDU_ROWS
 
 WEBSOCKET_HOST = "localhost"
 WEBSOCKET_PORT = 8320
 
 BASE_REST_URL = "http://localhost:8086/api/v2/datarefs"
 BASE_WEBSOCKET_URI = f"ws://{WEBSOCKET_HOST}:8086/api/v2"
-EXTERNAL_DISPLAY_WS = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-captain"
+
+WS_CAPTAIN = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-captain"
+WS_CO_PILOT = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-co-pilot"
 
 BALLOT_BOX = "\u2610"
 DEGREES = "\u00b0"
@@ -20,14 +25,45 @@ DEGREES = "\u00b0"
 CHAR_MAP = {"\x1d": BALLOT_BOX, "\x1c": DEGREES}
 
 
-queue = asyncio.Queue()
+class FanoutExchange:
+    def __init__(self):
+        self.__consumer_queues: list[asyncio.Queue] = []
+
+    def add_consumer(self):
+        queue = asyncio.Queue()
+        self.__consumer_queues.append(queue)
+
+        return queue
+
+    async def put(self, message):
+        for queue in self.__consumer_queues:
+            await queue.put(message)
+
+
+class CduDevice(Enum):
+    Captain = "cduL"
+    CoPilot = "cduR"
+
+    def get_endpoint(self) -> str:
+        match self:
+            case CduDevice.Captain:
+                return WS_CAPTAIN
+            case CduDevice.CoPilot:
+                return WS_CO_PILOT
+            case _:
+                raise KeyError(f"Invalid device specified {self}")
+
+    def get_symbol_dataref(self) -> str:
+        return f"1-sim/{self.value}/display/symbols"
+
+    def get_symbol_color_dataref(self) -> str:
+        return f"1-sim/{self.value}/display/symbolsColor"
+
+    def get_symbol_size_dataref(self) -> str:
+        return f"1-sim/{self.value}/display/symbolsSize"
 
 
 class CduLine:
-    SYMBOLS = "1-sim/cduL/display/symbols"
-    SYMBOLS_COLOR = "1-sim/cduL/display/symbolsColor"
-    SYMBOLS_SIZE = "1-sim/cduL/display/symbolsSize"
-
     def __init__(self, char: str, size: int, color: int):
         self.char = char
         self.size = size
@@ -38,12 +74,18 @@ def get_char(char: str) -> str:
     return CHAR_MAP.get(char, char)
 
 
-def fetch_dataref_mapping():
+def fetch_dataref_mapping(available_devices: list[CduDevice]):
     with urllib.request.urlopen(BASE_REST_URL, timeout=5) as response:
         response_json = json.load(response)
 
         data = list(response_json["data"])
-        mcdu_datarefs = filter(lambda x: CduLine.SYMBOLS in str(x["name"]), data)
+        mcdu_datarefs = filter(
+            lambda x: any(
+                device.get_symbol_dataref() in str(x["name"])
+                for device in available_devices
+            ),
+            data,
+        )
 
         return dict(
             map(
@@ -53,26 +95,23 @@ def fetch_dataref_mapping():
         )
 
 
-def process_display_datarefs(values: dict[str, str]) -> list[CduLine]:
-    symbols = values[CduLine.SYMBOLS]
-    symbol_sizes = values[CduLine.SYMBOLS_SIZE]
-    symbol_colors = values[CduLine.SYMBOLS_COLOR]
-
-    zipped = zip(symbols, symbol_sizes, symbol_colors)
-
-    return [CduLine(symbol, size, color) for symbol, size, color in zipped]
-
-
-def generate_display_json(values: dict[str, str]):
+def generate_display_json(device: CduDevice, values: dict[str, str]):
     display_data = [[] for _ in range(CDU_ROWS * CDU_COLUMNS)]
 
-    processed_datarefs = process_display_datarefs(values)
+    cdu_lines = [
+        CduLine(symbol, size, color)
+        for symbol, size, color in zip(
+            values[device.get_symbol_dataref()],
+            values[device.get_symbol_size_dataref()],
+            values[device.get_symbol_color_dataref()],
+        )
+    ]
 
     for row in range(CDU_ROWS):
         for col in range(CDU_COLUMNS):
             index = row * CDU_COLUMNS + col
 
-            cdu_line = processed_datarefs[index]
+            cdu_line = cdu_lines[index]
             if cdu_line.char == " ":
                 continue
 
@@ -85,21 +124,27 @@ def generate_display_json(values: dict[str, str]):
     return json.dumps({"Target": "Display", "Data": display_data})
 
 
-async def handle_display_update():
-    async for websocket in websockets.connect(EXTERNAL_DISPLAY_WS):
+async def handle_device_update(device: CduDevice, queue: asyncio.Queue):
+    async for device_connection in websockets.connect(device.get_endpoint()):
         while True:
-            values = await queue.get()
-            display_json = generate_display_json(values)
+            target_device, values = await queue.get()
+            if target_device != device:
+                continue
+
+            display_json = generate_display_json(device, values)
             try:
-                await websocket.send(display_json)
-            except websockets.exceptions.ConnectionClosed:
-                await queue.put(values)
+                await device_connection.send(display_json)
+            except websockets.ConnectionClosedError:
+                await queue.put((target_device, values))
                 break
 
 
-async def handle_datarefs():
-    dataref_map = fetch_dataref_mapping()
-    last_known_values = {}
+async def handle_dataref_updates(
+    exchange: FanoutExchange, available_devices: list[CduDevice]
+):
+    last_known_values = {device: {} for device in available_devices}
+
+    dataref_map = fetch_dataref_mapping(available_devices)
     async for websocket in websockets.connect(BASE_WEBSOCKET_URI):
         try:
             await websocket.send(
@@ -122,7 +167,7 @@ async def handle_datarefs():
                 if "data" not in data:
                     continue
 
-                new_values = dict(last_known_values)
+                new_values = copy.deepcopy(last_known_values)
 
                 for dataref_id, value in data["data"].items():
                     dataref_id = int(dataref_id)
@@ -130,27 +175,55 @@ async def handle_datarefs():
                         continue
 
                     dataref_name = dataref_map[dataref_id]
+                    device = (
+                        CduDevice.Captain
+                        if CduDevice.Captain.value in dataref_name
+                        else CduDevice.CoPilot
+                    )
 
-                    new_values[dataref_name] = (
+                    new_values[device][dataref_name] = (
                         base64.b64decode(value).decode().replace("\x00", " ")
                         if isinstance(value, str)
                         else value
                     )
 
-                if new_values == last_known_values:
-                    continue
+                for device, values in new_values.items():
+                    if values == last_known_values[device]:
+                        continue
 
-                last_known_values = new_values
-                await queue.put(new_values)
+                    last_known_values[device] = values
+                    await exchange.put((device, values))
         except websockets.exceptions.ConnectionClosed:
             continue
 
 
+async def get_available_devices() -> list[CduDevice]:
+    device_candidates = [device for device in CduDevice]
+
+    available_devices = []
+
+    for device in device_candidates:
+        try:
+            async with websockets.connect(device.get_endpoint()) as _:
+                available_devices.append(device)
+        except websockets.WebSocketException:
+            continue
+
+    return available_devices
+
+
 async def main():
-    await asyncio.gather(
-        asyncio.create_task(handle_datarefs()),
-        asyncio.create_task(handle_display_update()),
-    )
+    exchange = FanoutExchange()
+    available_devices = await get_available_devices()
+
+    tasks = [asyncio.create_task(handle_dataref_updates(exchange, available_devices))]
+
+    for device in available_devices:
+        tasks.append(
+            asyncio.create_task(handle_device_update(device, exchange.add_consumer()))
+        )
+
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
