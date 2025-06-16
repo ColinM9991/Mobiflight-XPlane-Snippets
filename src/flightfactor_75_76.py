@@ -4,7 +4,8 @@ import copy
 import json
 import urllib.request
 import websockets
-from enum import Enum
+from enum import StrEnum
+from typing import Self
 
 CDU_COLUMNS = 24
 CDU_ROWS = 14
@@ -40,7 +41,7 @@ class FanoutExchange:
             await queue.put(message)
 
 
-class CduDevice(Enum):
+class CduDevice(StrEnum):
     Captain = "cduL"
     CoPilot = "cduR"
 
@@ -62,12 +63,15 @@ class CduDevice(Enum):
     def get_symbol_size_dataref(self) -> str:
         return f"1-sim/{self.value}/display/symbolsSize"
 
+    @staticmethod
+    def from_dataref(value: str) -> Self:
+        start_index = value.index("/") + 1
+        device = value[start_index : value.index("/", start_index)]
 
-class CduLine:
-    def __init__(self, char: str, size: int, color: int):
-        self.char = char
-        self.size = size
-        self.color = color
+        try:
+            return CduDevice(device)
+        except ValueError:
+            raise ValueError("Invalid CDU dataref specified", value)
 
 
 def get_char(char: str) -> str:
@@ -78,19 +82,16 @@ def fetch_dataref_mapping(available_devices: list[CduDevice]):
     with urllib.request.urlopen(BASE_REST_URL, timeout=5) as response:
         response_json = json.load(response)
 
-        data = list(response_json["data"])
-        mcdu_datarefs = filter(
-            lambda x: any(
-                device.get_symbol_dataref() in str(x["name"])
-                for device in available_devices
-            ),
-            data,
-        )
-
         return dict(
             map(
                 lambda dataref: (int(dataref["id"]), str(dataref["name"])),
-                mcdu_datarefs,
+                filter(
+                    lambda x: any(
+                        device.get_symbol_dataref() in str(x["name"])
+                        for device in available_devices
+                    ),
+                    response_json["data"],
+                ),
             )
         )
 
@@ -99,8 +100,8 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
     display_data = [[] for _ in range(CDU_ROWS * CDU_COLUMNS)]
 
     cdu_lines = [
-        CduLine(symbol, size, color)
-        for symbol, size, color in zip(
+        (char, size, color)
+        for char, size, color in zip(
             values[device.get_symbol_dataref()],
             values[device.get_symbol_size_dataref()],
             values[device.get_symbol_color_dataref()],
@@ -111,21 +112,22 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
         for col in range(CDU_COLUMNS):
             index = row * CDU_COLUMNS + col
 
-            cdu_line = cdu_lines[index]
-            if cdu_line.char == " ":
+            char, size, _ = cdu_lines[index]
+            if char == " ":
                 continue
 
             display_data[index] = [
-                get_char(cdu_line.char),
+                get_char(char),
                 "g",
-                cdu_line.size,
+                size,
             ]
 
     return json.dumps({"Target": "Display", "Data": display_data})
 
 
 async def handle_device_update(device: CduDevice, queue: asyncio.Queue):
-    async for device_connection in websockets.connect(device.get_endpoint()):
+    endpoint_uri = device.get_endpoint()
+    async for device_connection in websockets.connect(endpoint_uri):
         while True:
             target_device, values = await queue.get()
             if target_device != device:
@@ -175,13 +177,9 @@ async def handle_dataref_updates(
                         continue
 
                     dataref_name = dataref_map[dataref_id]
-                    device = (
-                        CduDevice.Captain
-                        if CduDevice.Captain.value in dataref_name
-                        else CduDevice.CoPilot
-                    )
+                    target_device = CduDevice.from_dataref(dataref_name)
 
-                    new_values[device][dataref_name] = (
+                    new_values[target_device][dataref_name] = (
                         base64.b64decode(value).decode().replace("\x00", " ")
                         if isinstance(value, str)
                         else value
