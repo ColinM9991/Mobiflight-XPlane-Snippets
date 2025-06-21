@@ -187,7 +187,7 @@ def generate_display_json(values: dict[str, str]):
     return json.dumps({"Target": "Display", "Data": display_data})
 
 
-async def handle_display_update(queue: asyncio.Queue, device: CduDevice):
+async def handle_device_update(queue: asyncio.Queue, device: CduDevice):
     endpoint = device.get_endpoint()
     async for websocket in websockets.connect(endpoint):
         while True:
@@ -200,7 +200,7 @@ async def handle_display_update(queue: asyncio.Queue, device: CduDevice):
                 break
 
 
-async def handle_datarefs(queue: asyncio.Queue, device: CduDevice):
+async def handle_dataref_updates(queue: asyncio.Queue, device: CduDevice):
     def process_slew_keys(value: int) -> str:
         match value:
             case 1:
@@ -214,8 +214,9 @@ async def handle_datarefs(queue: asyncio.Queue, device: CduDevice):
 
         return result.rjust(24)
 
-    dataref_map = fetch_dataref_mapping(device)
     last_known_values = {}
+
+    dataref_map = fetch_dataref_mapping(device)
     async for websocket in websockets.connect(BASE_WEBSOCKET_URI):
         try:
             await websocket.send(
@@ -285,8 +286,8 @@ async def main():
     for device in available_devices:
         queue = asyncio.Queue()
 
-        tasks.append(asyncio.create_task(handle_datarefs(queue, device)))
-        tasks.append(asyncio.create_task(handle_display_update(queue, device)))
+        tasks.append(asyncio.create_task(handle_dataref_updates(queue, device)))
+        tasks.append(asyncio.create_task(handle_device_update(queue, device)))
 
     await asyncio.gather(*tasks)
 

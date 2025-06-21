@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import copy
 import json
 import urllib.request
 import websockets
@@ -26,21 +25,6 @@ DEGREES = "\u00b0"
 CHAR_MAP = {"\x1d": BALLOT_BOX, "\x1c": DEGREES}
 
 
-class FanoutExchange:
-    def __init__(self):
-        self.__consumer_queues: list[asyncio.Queue] = []
-
-    def add_consumer(self):
-        queue = asyncio.Queue()
-        self.__consumer_queues.append(queue)
-
-        return queue
-
-    async def put(self, message):
-        for queue in self.__consumer_queues:
-            await queue.put(message)
-
-
 class CduDevice(StrEnum):
     Captain = "cduL"
     CoPilot = "cduR"
@@ -55,30 +39,20 @@ class CduDevice(StrEnum):
                 raise KeyError(f"Invalid device specified {self}")
 
     def get_symbol_dataref(self) -> str:
-        return f"1-sim/{self.value}/display/symbols"
+        return f"1-sim/{self}/display/symbols"
 
     def get_symbol_color_dataref(self) -> str:
-        return f"1-sim/{self.value}/display/symbolsColor"
+        return f"1-sim/{self}/display/symbolsColor"
 
     def get_symbol_size_dataref(self) -> str:
-        return f"1-sim/{self.value}/display/symbolsSize"
-
-    @staticmethod
-    def from_dataref(value: str) -> Self:
-        start_index = value.index("/") + 1
-        device = value[start_index : value.index("/", start_index)]
-
-        try:
-            return CduDevice(device)
-        except ValueError:
-            raise ValueError("Invalid CDU dataref specified", value)
+        return f"1-sim/{self}/display/symbolsSize"
 
 
 def get_char(char: str) -> str:
     return CHAR_MAP.get(char, char)
 
 
-def fetch_dataref_mapping(available_devices: list[CduDevice]):
+def fetch_dataref_mapping(device: CduDevice):
     with urllib.request.urlopen(BASE_REST_URL, timeout=5) as response:
         response_json = json.load(response)
 
@@ -86,10 +60,7 @@ def fetch_dataref_mapping(available_devices: list[CduDevice]):
             map(
                 lambda dataref: (int(dataref["id"]), str(dataref["name"])),
                 filter(
-                    lambda x: any(
-                        device.get_symbol_dataref() in str(x["name"])
-                        for device in available_devices
-                    ),
+                    lambda x: device.get_symbol_dataref() in str(x["name"]),
                     response_json["data"],
                 ),
             )
@@ -125,28 +96,23 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
     return json.dumps({"Target": "Display", "Data": display_data})
 
 
-async def handle_device_update(device: CduDevice, queue: asyncio.Queue):
-    endpoint_uri = device.get_endpoint()
-    async for device_connection in websockets.connect(endpoint_uri):
+async def handle_device_update(queue: asyncio.Queue, device: CduDevice):
+    endpoint = device.get_endpoint()
+    async for websocket in websockets.connect(endpoint):
         while True:
-            target_device, values = await queue.get()
-            if target_device != device:
-                continue
-
-            display_json = generate_display_json(device, values)
+            values = await queue.get()
+            display_json = generate_display_json(values)
             try:
-                await device_connection.send(display_json)
-            except websockets.ConnectionClosedError:
-                await queue.put((target_device, values))
+                await websocket.send(display_json)
+            except websockets.exceptions.ConnectionClosed:
+                await queue.put(values)
                 break
 
 
-async def handle_dataref_updates(
-    exchange: FanoutExchange, available_devices: list[CduDevice]
-):
-    last_known_values = {device: {} for device in available_devices}
+async def handle_dataref_updates(queue: asyncio.Queue, device: CduDevice):
+    last_known_values = {}
 
-    dataref_map = fetch_dataref_mapping(available_devices)
+    dataref_map = fetch_dataref_mapping(device)
     async for websocket in websockets.connect(BASE_WEBSOCKET_URI):
         try:
             await websocket.send(
@@ -169,7 +135,7 @@ async def handle_dataref_updates(
                 if "data" not in data:
                     continue
 
-                new_values = copy.deepcopy(last_known_values)
+                new_values = dict(last_known_values)
 
                 for dataref_id, value in data["data"].items():
                     dataref_id = int(dataref_id)
@@ -177,20 +143,18 @@ async def handle_dataref_updates(
                         continue
 
                     dataref_name = dataref_map[dataref_id]
-                    target_device = CduDevice.from_dataref(dataref_name)
 
-                    new_values[target_device][dataref_name] = (
+                    new_values[dataref_name] = (
                         base64.b64decode(value).decode().replace("\x00", " ")
                         if isinstance(value, str)
                         else value
                     )
 
-                for device, values in new_values.items():
-                    if values == last_known_values[device]:
-                        continue
+                if new_values == last_known_values:
+                    continue
 
-                    last_known_values[device] = values
-                    await exchange.put((device, values))
+                last_known_values = new_values
+                await queue.put(new_values)
         except websockets.exceptions.ConnectionClosed:
             continue
 
@@ -211,15 +175,15 @@ async def get_available_devices() -> list[CduDevice]:
 
 
 async def main():
-    exchange = FanoutExchange()
     available_devices = await get_available_devices()
 
-    tasks = [asyncio.create_task(handle_dataref_updates(exchange, available_devices))]
+    tasks = []
 
     for device in available_devices:
-        tasks.append(
-            asyncio.create_task(handle_device_update(device, exchange.add_consumer()))
-        )
+        queue = asyncio.Queue()
+
+        tasks.append(asyncio.create_task(handle_dataref_updates(queue, device)))
+        tasks.append(asyncio.create_task(handle_device_update(queue, device)))
 
     await asyncio.gather(*tasks)
 
