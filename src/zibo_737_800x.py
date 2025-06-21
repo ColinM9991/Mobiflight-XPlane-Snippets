@@ -4,7 +4,7 @@ import copy
 import json
 import urllib.request
 import websockets
-from enum import Enum
+from enum import StrEnum
 
 CDU_COLUMNS = 24
 CDU_ROWS = 14
@@ -38,7 +38,7 @@ class FanoutExchange:
             await queue.put(message)
 
 
-class CduDevice(Enum):
+class CduDevice(StrEnum):
     Captain = "fmc1"
     CoPilot = "fmc2"
 
@@ -59,7 +59,7 @@ def fetch_dataref_mapping(available_devices: list[CduDevice]):
         data = list(response_json["data"])
         dataref_map = filter(
             lambda x: any(
-                str(x["name"]).startswith(f"laminar/B738/{device.value}")
+                str(x["name"]).startswith(f"laminar/B738/{device}")
                 for device in available_devices
             ),
             data,
