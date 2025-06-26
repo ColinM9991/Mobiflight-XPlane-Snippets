@@ -17,16 +17,19 @@ BASE_WEBSOCKET_URI = f"ws://{WEBSOCKET_HOST}:8086/api/v2"
 
 WS_CAPTAIN = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-captain"
 WS_CO_PILOT = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-co-pilot"
+WS_OBSERVER = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-observer"
 
 BALLOT_BOX = "\u2610"
 DEGREES = "\u00b0"
 
 CHAR_MAP = {"\x1d": BALLOT_BOX, "\x1c": DEGREES}
+COLOR_MAP = {1: "m", 2: "g", 4: "e", 5: "g"}
 
 
 class CduDevice(StrEnum):
     Captain = "cduL"
     CoPilot = "cduR"
+    Observer = "cduC"
 
     def get_endpoint(self) -> str:
         match self:
@@ -34,6 +37,8 @@ class CduDevice(StrEnum):
                 return WS_CAPTAIN
             case CduDevice.CoPilot:
                 return WS_CO_PILOT
+            case CduDevice.Observer:
+                return WS_OBSERVER
             case _:
                 raise KeyError(f"Invalid device specified {self}")
 
@@ -46,9 +51,16 @@ class CduDevice(StrEnum):
     def get_symbol_size_dataref(self) -> str:
         return f"1-sim/{self}/display/symbolsSize"
 
+    def get_scratch_pad_dataref(self) -> str:
+        return f"1-sim/{self}/display/scratchPadSymbols"
+
 
 def get_char(char: str) -> str:
     return CHAR_MAP.get(char, char)
+
+
+def get_color(color: int) -> str:
+    return COLOR_MAP.get(color, "w")
 
 
 def fetch_dataref_mapping(device: CduDevice):
@@ -57,9 +69,10 @@ def fetch_dataref_mapping(device: CduDevice):
 
         return dict(
             map(
-                lambda dataref: (int(dataref["id"]), str(dataref["name"])),
+                lambda dataref: (int(dataref["id"]), str(dataref["name"]).strip()),
                 filter(
-                    lambda x: device.get_symbol_dataref() in str(x["name"]),
+                    lambda x: device.get_symbol_dataref() in str(x["name"])
+                    or device.get_scratch_pad_dataref() in str(x["name"]),
                     response_json["data"],
                 ),
             )
@@ -81,14 +94,16 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
     for row in range(CDU_ROWS):
         for col in range(CDU_COLUMNS):
             index = row * CDU_COLUMNS + col
+            if index == (CDU_CELLS - 1):
+                continue
 
-            char, size, _ = cdu_lines[index]
+            char, size, color = cdu_lines[index]
             if char == " ":
                 continue
 
             display_data[index] = [
                 get_char(char),
-                "g",
+                get_color(color),
                 size,
             ]
 
