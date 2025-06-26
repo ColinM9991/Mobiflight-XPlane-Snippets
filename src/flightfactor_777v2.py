@@ -22,7 +22,7 @@ WS_OBSERVER = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-observer"
 BALLOT_BOX = "\u2610"
 DEGREES = "\u00b0"
 
-CHAR_MAP = {"\x1d": BALLOT_BOX, "\x1c": DEGREES}
+CHAR_MAP = {35: BALLOT_BOX, 42: DEGREES}
 COLOR_MAP = {1: "m", 2: "g", 4: "e", 5: "g"}
 
 
@@ -94,11 +94,9 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
     for row in range(CDU_ROWS):
         for col in range(CDU_COLUMNS):
             index = row * CDU_COLUMNS + col
-            if index == (CDU_CELLS - 1):
-                continue
 
             char, size, color = cdu_lines[index]
-            if char == " ":
+            if char == 0:
                 continue
 
             display_data[index] = [
