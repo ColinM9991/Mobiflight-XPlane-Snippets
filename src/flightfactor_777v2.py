@@ -23,7 +23,7 @@ BALLOT_BOX = "\u2610"
 DEGREES = "\u00b0"
 
 CHAR_MAP = {35: BALLOT_BOX, 42: DEGREES}
-COLOR_MAP = {1: "m", 2: "g", 4: "e", 5: "g"}
+COLOR_MAP = {1: "m", 2: "g", 3: "c", 4: "e", 5: "g"}
 
 
 class CduDevice(StrEnum):
@@ -91,7 +91,7 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
         )
     ]
 
-    for row in range(CDU_ROWS):
+    for row in range(CDU_ROWS - 1):
         for col in range(CDU_COLUMNS):
             index = row * CDU_COLUMNS + col
 
