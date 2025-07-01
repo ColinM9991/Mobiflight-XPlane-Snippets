@@ -189,7 +189,7 @@ def generate_display_json(values: dict[str, str]):
 
 async def handle_device_update(queue: asyncio.Queue, device: CduDevice):
     last_run_time = 0
-    rate_limit_time = 0.2
+    rate_limit_time = 0.1
 
     endpoint = device.get_endpoint()
     async for websocket in websockets.connect(endpoint):
