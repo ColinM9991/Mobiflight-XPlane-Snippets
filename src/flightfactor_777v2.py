@@ -22,8 +22,8 @@ WS_OBSERVER = f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}/winwing/cdu-observer"
 BALLOT_BOX = "\u2610"
 DEGREES = "\u00b0"
 
-CHAR_MAP = {35: BALLOT_BOX, 42: DEGREES}
-COLOR_MAP = {1: "m", 2: "g", 3: "c", 4: "e", 5: "g"}
+CHAR_MAP = {"#": BALLOT_BOX, "*": DEGREES}
+COLOR_MAP = {1: "w", 2: "m", 3: "g", 4: "c", 5: "e", 6: "c"}
 
 
 class CduDevice(StrEnum):
@@ -51,15 +51,17 @@ class CduDevice(StrEnum):
     def get_symbol_size_dataref(self) -> str:
         return f"1-sim/{self}/display/symbolsSize"
 
-    def get_scratch_pad_dataref(self) -> str:
-        return f"1-sim/{self}/display/scratchPadSymbols"
+    def get_symbol_effects_dataref(self) -> str:
+        return f"1-sim/{self}/display/symbolsEffects"
 
 
 def get_char(char: str) -> str:
     return CHAR_MAP.get(char, char)
 
 
-def get_color(color: int) -> str:
+def get_color(color: int, effect: int) -> str:
+    if effect == 1:
+        return "e"
     return COLOR_MAP.get(color, "w")
 
 
@@ -71,8 +73,7 @@ def fetch_dataref_mapping(device: CduDevice):
             map(
                 lambda dataref: (int(dataref["id"]), str(dataref["name"]).strip()),
                 filter(
-                    lambda x: device.get_symbol_dataref() in str(x["name"])
-                    or device.get_scratch_pad_dataref() in str(x["name"]),
+                    lambda x: device.get_symbol_dataref() in str(x["name"]),
                     response_json["data"],
                 ),
             )
@@ -83,25 +84,26 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
     display_data = [[] for _ in range(CDU_ROWS * CDU_COLUMNS)]
 
     cdu_lines = [
-        (char, size, color)
-        for char, size, color in zip(
+        (char, size, color, effect)
+        for char, size, color, effect in zip(
             values[device.get_symbol_dataref()],
             values[device.get_symbol_size_dataref()],
             values[device.get_symbol_color_dataref()],
+            values[device.get_symbol_effects_dataref()],
         )
     ]
 
-    for row in range(CDU_ROWS - 1):
+    for row in range(CDU_ROWS):
         for col in range(CDU_COLUMNS):
             index = row * CDU_COLUMNS + col
 
-            char, size, color = cdu_lines[index]
+            char, size, color, effect = cdu_lines[index]
             if char == 0:
                 continue
 
             display_data[index] = [
                 get_char(char),
-                get_color(color),
+                get_color(color, effect),
                 size,
             ]
 
@@ -109,13 +111,24 @@ def generate_display_json(device: CduDevice, values: dict[str, str]):
 
 
 async def handle_device_update(queue: asyncio.Queue, device: CduDevice):
+    last_run_time = 0
+    rate_limit_time = 0.1
+
     endpoint = device.get_endpoint()
     async for websocket in websockets.connect(endpoint):
         while True:
             values = await queue.get()
-            display_json = generate_display_json(device, values)
+
             try:
+                elapsed = asyncio.get_event_loop().time() - last_run_time
+
+                if elapsed < rate_limit_time:
+                    await asyncio.sleep(rate_limit_time - elapsed)
+
+                display_json = generate_display_json(device, values)
                 await websocket.send(display_json)
+                last_run_time = asyncio.get_event_loop().time()
+
             except websockets.exceptions.ConnectionClosed:
                 await queue.put(values)
                 break
