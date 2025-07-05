@@ -71,7 +71,9 @@ def fetch_dataref_mapping(device: CduDevice):
 
 def translate_values(values: dict[str, str]):
     """
-    The X-Crafts E-Jets has the worst CDU format of all aircraft and they seem to be intentionally obfuscating or making things difficult for some bizarre reason
+    Useful datarefs:
+     XCrafts/FMS/data_count1
+     XCrafts/FMS/CDU1_page
 
     There's a range of 70 datarefs for the CDU
     XCrafts/FMS/CDU_1_01
@@ -93,7 +95,7 @@ def translate_values(values: dict[str, str]):
     digit 5: size
     digit 6: color
 
-    Further to the frustration is that datarefs aren't cleared down which means content from previous pages will linger in the datarefs when another page is active.
+    Datarefs aren't cleared down which means content from previous pages will linger in the datarefs when another page is active.
     For example, if you open a page titled NO FUNCTION and then open the RTE page, the dataref value will be:
     010910ACTUNCTION
     """
